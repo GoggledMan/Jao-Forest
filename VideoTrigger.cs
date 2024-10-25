@@ -7,6 +7,11 @@ public class VideoTrigger : MonoBehaviour
     public VideoPlayer videoPlayer;   // Reference to the VideoPlayer
     public RawImage videoDisplay;     // Reference to the RawImage
     public GameObject videoPanel;     // Optional: a panel to contain the video display
+    
+    public GameObject buttontextBoxToHide;
+
+    // Reference to the text box you want to show
+    public GameObject doortextBoxToHide;
 
     private void Start()
     {
@@ -53,6 +58,26 @@ public class VideoTrigger : MonoBehaviour
                 videoPlayer.Play();
                 Debug.Log("Video started playing.");
             }
+        }
+
+        if (textBoxToHide != null)
+        {
+            buttontextBoxToHide.SetActive(false); // Hide the text box
+            Debug.Log($"{buttontextBoxToHide.name} has been hidden.");
+        }
+        else
+        {
+            Debug.LogWarning("No text box assigned to hide.");
+        }
+
+        if (doortextBoxToHide != null)
+        {
+            doortextBoxToHide.SetActive(false); // Hide the text box
+            Debug.Log($"{doortextBoxToHide.name} has been hidden.");
+        }
+        else
+        {
+            Debug.LogWarning("No text box assigned to hidden.");
         }
     }
 
