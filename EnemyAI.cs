@@ -6,80 +6,97 @@ using UnityEngine.UI;
 
 public class EnemyAI : MonoBehaviour
 {
+    public AudioLoudnessDetection detector; // Microphone component
+    public float loudnessSensitivity = 100; // How sensitive the microphone is
+    public float threshold = 0.1f; // The threshold for volume
     public NavMeshAgent ai; // Controls the enemy's movement
+    public List<Transform> destinations; // Points for the enemy to move to
     public float walkSpeed; // Enemy's walking speed
     public float chaseSpeed; // Enemy's chasing speed
     public float sightDistance; // Distance at which the enemy can see the player
     public float catchDistance; // Distance at which the enemy catches the player
     public Transform player; // Reference to the player
-    public float searchRadius; // Radius around the player where the AI knows the player is located
-    public float radiusEntryDistance = 1f; // Distance to determine if AI has entered the search radius
     public float idleTime, minIdleTime, maxIdleTime; // Idle timing variables
-    bool inSearchRadius; // Checks if the AI is within the search radius
-    bool chasing; // Checks if the enemy is chasing the player
-    Vector3 lastKnownPosition; // Last known position of the player
+    public bool walking; // Checks if the enemy is walking
+    Transform currentDest; // Current destination for the enemy
+    int randNum; // Random number for choosing destinations
     Coroutine idleCoroutine; // Manages the idle coroutine
+    bool chasing; // Checks if the enemy is chasing the player
+    float lostPlayerTime; // Timer for how long the player is out of sight
+    public float timeToForgetPlayer; // Time before stopping the chase
 
-    // Jumpscare components
     public Image jumpScareImage; // Reference to the image to show when the player is caught
-    public float jumpScareDuration = 2f; // Duration for which the jumpscare image is shown
 
     // Audio components
-    public AudioClip chaseAudio; // Audio clip for chasing sound
-    private AudioSource audioSource; // Audio source to play the sound
+    public AudioSource chaseAudioSource; // Reference to the AudioSource for chase audio
 
     void Start()
     {
+        walking = true;
+        randNum = Random.Range(0, destinations.Count);
+        currentDest = destinations[randNum];
         ai.speed = walkSpeed; // Set the initial walking speed
-        lastKnownPosition = Vector3.zero; // Initialize last known position
-
+        lostPlayerTime = 0f; // Initialize the lost player timer
         // Hide the jump scare image at the start
         jumpScareImage.gameObject.SetActive(false);
-
+        
         // Set up the audio source
-        audioSource = gameObject.AddComponent<AudioSource>();
-        audioSource.clip = chaseAudio; // Assign the chase audio clip
-        audioSource.loop = true; // Enable looping for continuous play
+        if (chaseAudioSource != null)
+        {
+            chaseAudioSource.loop = true; // Enable looping for continuous play
+        }
     }
 
     void Update()
     {
-        Vector3 directionToPlayer = player.position - transform.position;
-        float playerDistance = directionToPlayer.magnitude;
-
-        // Update the last known position to the player's current position
-        lastKnownPosition = player.position;
-
-        // Rotate towards the player
         FacePlayer();
 
-        // Stage 1: Move towards the player’s search radius
-        if (!inSearchRadius)
+        Vector3 directionToPlayer = player.position - transform.position;
+
+        // Check if the player is within sight distance
+        if (directionToPlayer.magnitude < sightDistance)
         {
-            if (playerDistance <= searchRadius)
+            StartChasingPlayer();
+            lostPlayerTime = 0f; // Reset the timer when player is seen
+        }
+        else if (chasing)
+        {
+            lostPlayerTime += Time.deltaTime;
+
+            if (lostPlayerTime > timeToForgetPlayer)
             {
-                inSearchRadius = true; // Entered the search radius
-            }
-            else
-            {
-                ai.destination = lastKnownPosition; // Move towards the player's general location
-                ai.speed = walkSpeed; 
+                StopChasingPlayer();
             }
         }
-        // Stage 2: Search within the radius
-        else if (inSearchRadius && !chasing)
+
+        // Handle walking behavior
+        if (walking && !chasing)
         {
-            ai.destination = GetRandomPointInRadius(lastKnownPosition, searchRadius); // Wander within the search radius
+            Vector3 dest = currentDest.position;
+            ai.destination = dest;
             ai.speed = walkSpeed;
 
-            // Check for sighting of the player
-            if (playerDistance < sightDistance)
+            if (ai.remainingDistance <= ai.stoppingDistance)
             {
-                StartChasingPlayer(); // Switch to chasing state
+                int randNum2 = Random.Range(0, 2);
+                if (randNum2 == 0)
+                {
+                    randNum = Random.Range(0, destinations.Count);
+                    currentDest = destinations[randNum];
+                }
+                else
+                {
+                    if (idleCoroutine != null)
+                    {
+                        StopCoroutine(idleCoroutine);
+                    }
+                    idleCoroutine = StartCoroutine(stayIdle());
+                    walking = false;
+                }
             }
         }
 
-        // Stage 3: Chasing the player
+        // Handle chasing behavior
         if (chasing)
         {
             ai.destination = player.position; // Set destination to player's position
@@ -90,57 +107,75 @@ public class EnemyAI : MonoBehaviour
                 PlayerCaught(); // Call the method for when the player is caught
             }
         }
-    }
 
-    // Rotate to face the player
-    void FacePlayer()
-    {
-        Vector3 directionToPlayer = player.position - transform.position; // Direction to player
-        directionToPlayer.y = 0; // Keep the rotation in the horizontal plane
+        // Handle microphone input
+        float loudness = detector.GetLoudnessFromMicrophone() * loudnessSensitivity;
 
-        // If the player is within a significant distance
-        if (directionToPlayer.magnitude > 0.1f) 
+        if (loudness < threshold)
         {
-            // Calculate the desired rotation
-            Quaternion targetRotation = Quaternion.LookRotation(directionToPlayer);
-
-            // Since the quad's front is facing the opposite direction, invert the rotation
-            Quaternion correctedRotation = Quaternion.Euler(targetRotation.eulerAngles.x, targetRotation.eulerAngles.y + 180, targetRotation.eulerAngles.z);
-
-            // Smoothly rotate toward the player
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, correctedRotation, Time.deltaTime * 360); 
+            loudness = 0;
+        }
+        else
+        {
+            StartChasingPlayer();
+            lostPlayerTime = 0f; // Reset the timer when player is heard
         }
     }
 
-    // Get a random point within a specified radius from a given position
-    Vector3 GetRandomPointInRadius(Vector3 center, float radius)
+    void FacePlayer()
     {
-        Vector3 randomPoint = center + Random.insideUnitSphere * radius;
-        NavMeshHit hit;
-        NavMesh.SamplePosition(randomPoint, out hit, radius, NavMesh.AllAreas);
-        return hit.position;
+        Vector3 directionToPlayer = player.position - transform.position;
+        directionToPlayer.y = 0;
+        Vector3 directionAwayFromPlayer = transform.position - player.position;
+
+        if (directionAwayFromPlayer.magnitude > 0.1f)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(directionAwayFromPlayer);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, Time.deltaTime * 360);
+        }
     }
 
     void StartChasingPlayer()
     {
         chasing = true; // Set chasing state
-        inSearchRadius = false; // Reset search radius state
-        ai.speed = chaseSpeed; // Set speed to chase speed
-        audioSource.Play(); // Start playing chase audio
+        walking = false; // Stop walking
+        if (idleCoroutine != null)
+        {
+            StopCoroutine(idleCoroutine); // Stop idle routine if active
+        }
+        if (chaseAudioSource != null && !chaseAudioSource.isPlaying)
+        {
+            chaseAudioSource.Play(); // Start playing chase audio
+        }
+    }
+
+    void StopChasingPlayer()
+    {
+        chasing = false; // Set chasing to false
+        lostPlayerTime = 0f; // Reset the timer
+        walking = true; // Resume walking behavior
+        randNum = Random.Range(0, destinations.Count);
+        currentDest = destinations[randNum];
+        if (chaseAudioSource != null)
+        {
+            chaseAudioSource.Stop(); // Stop the chase audio
+        }
     }
 
     void PlayerCaught()
     {
-        ai.isStopped = true; // Stop the AI movement
-        jumpScareImage.gameObject.SetActive(true); // Show the jumpscare image
-        StartCoroutine(HandleJumpscare()); // Start the jumpscare coroutine
-        player.GetComponent<PlayerController>().LockInput(true); // Lock player input
+        ai.isStopped = true;
+        gameObject.SetActive(false);
+        player.GetComponent<PlayerController>().LockInput(true);
+        jumpScareImage.gameObject.SetActive(true);
     }
 
-    IEnumerator HandleJumpscare()
+    IEnumerator stayIdle()
     {
-        yield return new WaitForSeconds(jumpScareDuration); // Wait for the duration of the jumpscare
-        jumpScareImage.gameObject.SetActive(false); // Hide the jumpscare image
-        gameObject.SetActive(false); // Deactivate the AI after the jumpscare
+        float idleDuration = Random.Range(minIdleTime, maxIdleTime);
+        yield return new WaitForSeconds(idleDuration);
+        walking = true;
+        randNum = Random.Range(0, destinations.Count);
+        currentDest = destinations[randNum];
     }
 }
